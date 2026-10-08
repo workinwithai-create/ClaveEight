@@ -8,12 +8,12 @@
 }
 * { box-sizing: border-box; }
 html, body { margin: 0; background: var(--paper); color: var(--ink); font: 15px/1.45 "Iowan Old Style", Palatino, Georgia, serif; }
-body { padding: 28px 22px 64px; max-width: 980px; margin: 0 auto; }
+body { padding: calc(28px + env(safe-area-inset-top)) 22px calc(64px + env(safe-area-inset-bottom)); max-width: 980px; margin: 0 auto; }
 h1 { font-size: 42px; line-height: 0.95; margin: 0 0 6px; letter-spacing: -0.03em; }
 .kicker { letter-spacing: 0.14em; text-transform: uppercase; font: 11px/1.3 ui-sans-serif, system-ui, sans-serif; color: #7a6d5e; }
 p.lede { max-width: 62ch; }
 button, input, select { font: 14px/1.2 ui-sans-serif, system-ui, sans-serif; }
-button { border: 1px solid var(--ink); background: var(--card); color: var(--ink); padding: 8px 12px; border-radius: 999px; cursor: pointer; }
+button { border: 1px solid var(--ink); background: var(--card); color: var(--ink); padding: 10px 14px; min-height: 44px; border-radius: 999px; cursor: pointer; }
 button.on, button.primary { background: var(--ink); color: var(--paper); }
 button.clave { border-color: var(--clave); }
 button.clave.on { background: var(--clave); }
@@ -35,3 +35,10 @@ input, select { border: 1px solid var(--line); background: white; padding: 8px 1
 #gate.hidden { display: none; }
 #gate button { font-size: 18px; padding: 16px 22px; }
 .note { font: 12px/1.4 ui-sans-serif, system-ui, sans-serif; color: #6d6256; }
+
+@media (max-width: 720px) {
+  h1 { font-size: 34px; }
+  .bars { grid-template-columns: repeat(4, 1fr); }
+  #gate button { min-height: 56px; width: min(92vw, 320px); }
+  .row button { flex: 1 1 42%; }
+}

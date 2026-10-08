@@ -43,3 +43,12 @@ Pinned commit SHAs only. Branch tips are not allowed.
 ## License
 
 MIT. workinwithai-create.
+
+
+## Export acceptance
+
+Default bounce is 48 kHz, 24-bit stereo. At 92 BPM and 8 bars the loop file is exactly 1,001,739 samples (`Math.round(8 * 4 * 60 / 92 * 48000)`), first downbeat at sample 0. The offline render decodes the already-loaded ArrayBuffers into an OfflineAudioContext. It does not re-download. MIDI writes one track per chair with tempo and 4/4 set, and overlapping chord notes use absolute ticks so a DAW does not drop the stack.
+
+Permanent URL: https://claveeight.vercel.app
+
+This desk is free. No checkout. A priced build would need a Lemon Squeezy key check before it can be called a paid ship.

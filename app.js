@@ -160,8 +160,8 @@ function eventsAt(stepIndex) {
   return ev.filter(e => !state.mutes[e.voice]);
 }
 
-function nearest(voice, midi) {
-  const bank = banks[voice] || [];
+function nearest(voice, midi, bankMap) {
+  const bank = (bankMap || banks)[voice] || [];
   let best = null, dist = 99;
   bank.forEach(s => {
     const d = Math.abs(s.midi - midi);
@@ -177,8 +177,8 @@ function stopSources() {
   sources = [];
 }
 
-function scheduleHit(ctxLocal, dest, when, ev) {
-  const pick = nearest(ev.voice, ev.midi);
+function scheduleHit(ctxLocal, dest, when, ev, bankMap, live) {
+  const pick = nearest(ev.voice, ev.midi, bankMap);
   if (!pick) return;
   const src = ctxLocal.createBufferSource();
   src.buffer = pick.buf;
@@ -190,25 +190,26 @@ function scheduleHit(ctxLocal, dest, when, ev) {
   }
   const g = ctxLocal.createGain();
   const peak = ev.gain;
-  g.gain.setValueAtTime(0.0001, when);
-  g.gain.linearRampToValueAtTime(peak, when + 0.012);
+  const attack = ev.voice === "Kick" || ev.voice === "Snare" || ev.voice === "Woodblock" ? 0.0005 : 0.012;
+  g.gain.setValueAtTime(peak, when);
+  g.gain.linearRampToValueAtTime(peak, when + attack);
   const end = when + ev.dur;
-  g.gain.setValueAtTime(peak, Math.max(when + 0.012, end - 0.02));
+  g.gain.setValueAtTime(peak, Math.max(when + attack, end - 0.012));
   g.gain.linearRampToValueAtTime(0.0001, end + 0.012);
   src.connect(g); g.connect(dest);
   src.start(when);
   src.stop(end + 0.03);
-  track(src);
+  if (live) track(src);
 }
 
-function scheduleStep(stepIndex, when, ctxLocal, dest) {
-  eventsAt(stepIndex).forEach(ev => scheduleHit(ctxLocal, dest, when, ev));
+function scheduleStep(stepIndex, when, ctxLocal, dest, bankMap, live) {
+  eventsAt(stepIndex).forEach(ev => scheduleHit(ctxLocal, dest, when, ev, bankMap, live));
 }
 
 function scheduler() {
   if (!state.playing || !ctx) return;
   while (nextStepTime < ctx.currentTime + SCHEDULE_AHEAD) {
-    scheduleStep(step, nextStepTime, ctx, master);
+    scheduleStep(step, nextStepTime, ctx, master, banks, true);
     const stepDur = 60 / state.bpm / 4;
     nextStepTime += stepDur;
     step = (step + 1) % (BARS * STEPS);
@@ -249,7 +250,7 @@ function playhead() {
 function exportLength(bars, bpm) {
   return Math.round(bars * 4 * 60 / bpm * SR);
 }
-function renderOffline(withTail) {
+async function renderOffline(withTail) {
   const bars = BARS;
   const bpm = state.bpm;
   const length = exportLength(bars, bpm);
@@ -264,10 +265,17 @@ function renderOffline(withTail) {
   lim.attack.value = 0.003;
   lim.release.value = 0.12;
   bus.connect(lim); lim.connect(off.destination);
+  const offlineBanks = {};
+  for (const [id, voice, url, midi] of SAMPLES) {
+    if (!raw[id]) throw new Error("Missing raw sample for " + voice);
+    const buf = await off.decodeAudioData(raw[id].slice(0));
+    offlineBanks[voice] = offlineBanks[voice] || [];
+    offlineBanks[voice].push({ id, midi, buf });
+  }
   const stepDur = 60 / bpm / 4;
   let t = 0;
   for (let i = 0; i < bars * STEPS; i++) {
-    scheduleStep(i, t, off, bus);
+    scheduleStep(i, t, off, bus, offlineBanks, false);
     t += stepDur;
   }
   return off.startRendering().then(buf => {
@@ -339,13 +347,17 @@ function writeMidi() {
     const ev = [];
     const name = Array.from(tr.voice).map(c => c.charCodeAt(0));
     pushMeta(ev, 0, [0xFF, 0x03, name.length, ...name]);
-    const notes = tr.events.slice().sort((a, b) => a.tick - b.tick);
+    const timed = [];
+    tr.events.forEach(n => {
+      timed.push({ tick: n.tick, kind: 1, midi: n.midi, vel: Math.max(1, Math.min(127, n.vel)) });
+      timed.push({ tick: n.tick + n.dur, kind: 0, midi: n.midi, vel: 0 });
+    });
+    timed.sort((a, b) => a.tick - b.tick || a.kind - b.kind);
     let last = 0;
-    notes.forEach(n => {
-      ev.push(...vlq(n.tick - last), 0x90, n.midi, Math.max(1, Math.min(127, n.vel)));
+    timed.forEach(n => {
+      const delta = Math.max(0, n.tick - last);
+      ev.push(...vlq(delta), n.kind ? 0x90 : 0x80, n.midi, n.vel);
       last = n.tick;
-      ev.push(...vlq(n.dur), 0x80, n.midi, 0);
-      last = n.tick + n.dur;
     });
     pushMeta(ev, 0, [0xFF, 0x2F, 0x00]);
     bytes.push(...chunk(ev));
@@ -423,6 +435,34 @@ async function ensureCtx() {
   armed = true;
   document.getElementById("gate").classList.add("hidden");
 }
+
+function pcm24(view, offset) {
+  const b0 = view.getUint8(offset);
+  const b1 = view.getUint8(offset + 1);
+  let b2 = view.getUint8(offset + 2);
+  let v = b0 | (b1 << 8) | (b2 << 16);
+  if (v & 0x800000) v |= ~0xffffff;
+  return v / 8388607;
+}
+async function exportAcceptance() {
+  const saved = { bpm: state.bpm, mode: state.mode, recipe: state.recipe };
+  state.bpm = 92;
+  state.mode = "B";
+  state.recipe = "son32";
+  const blob = await renderOffline(false);
+  state.bpm = saved.bpm;
+  state.mode = saved.mode;
+  state.recipe = saved.recipe;
+  const ab = await blob.arrayBuffer();
+  const view = new DataView(ab);
+  const dataBytes = view.getUint32(40, true);
+  const samples = dataBytes / 6;
+  const expected = Math.round(8 * 4 * 60 / 92 * SR);
+  let peak1 = 0;
+  for (let i = 0; i < 48; i++) peak1 = Math.max(peak1, Math.abs(pcm24(view, 44 + i * 6)));
+  return { samples, expected, match: samples === expected, firstMsPeak: peak1, within1ms: peak1 > 0.001 };
+}
+window.claveExportCheck = exportAcceptance;
 
 async function loadSamples() {
   missing = [];
